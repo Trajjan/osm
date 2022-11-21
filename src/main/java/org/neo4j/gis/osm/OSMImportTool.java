@@ -4,6 +4,7 @@ import org.neo4j.common.Validator;
 import org.neo4j.configuration.Config;
 import org.neo4j.configuration.GraphDatabaseSettings;
 import org.neo4j.configuration.SettingValueParsers;
+import org.neo4j.cypher.internal.cache.CacheTracer;
 import org.neo4j.function.Predicates;
 import org.neo4j.gis.osm.importer.OSMInput;
 import org.neo4j.gis.osm.importer.PrintingImportLogicMonitor;
@@ -32,9 +33,11 @@ import org.neo4j.kernel.impl.transaction.log.files.TransactionLogInitializer;
 import org.neo4j.kernel.impl.util.Validators;
 import org.neo4j.kernel.internal.Version;
 import org.neo4j.kernel.lifecycle.LifeSupport;
+import org.neo4j.logging.NullLogProvider;
 import org.neo4j.logging.internal.LogService;
 import org.neo4j.logging.internal.SimpleLogService;
 import org.neo4j.logging.log4j.Log4jLogProvider;
+import org.neo4j.logging.log4j.Neo4jLoggerContext;
 import org.neo4j.memory.EmptyMemoryTracker;
 import org.neo4j.scheduler.JobScheduler;
 
@@ -384,7 +387,8 @@ public class OSMImportTool {
 
         Config config = Config.newBuilder().fromConfig(dbConfig).set(logs_directory, Path.of(logsDir.getCanonicalPath())).build();
         Path internalLogFile = config.get(server_logging_config_path);
-        LogService logService = life.add(new SimpleLogService(new Log4jLogProvider(new FileOutputStream(internalLogFile.toFile()))));
+
+        LogService logService = life.add(new SimpleLogService(NullLogProvider.getInstance()));
         final JobScheduler jobScheduler = life.add(createScheduler());
 
         life.start();
@@ -395,7 +399,7 @@ public class OSMImportTool {
         var cacheTracer = tracePageCache ? new DefaultPageCacheTracer() : PageCacheTracer.NULL;
         BatchImporter importer = BatchImporterFactory.withHighestPriority().instantiate(databaseLayout,
                 fs,
-                null, // no external page cache
+                cacheTracer, // no external page cache
                 configuration,
                 logService,
                 executionMonitor,

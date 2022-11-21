@@ -154,9 +154,9 @@ public class OSMImportToolTest {
     private void importAndAssert(String name, BiConsumer<GraphDatabaseService, Map<String, Long>> assertions, boolean tracePageCache) throws IOException {
         File osmFile = findOSMFile(name);
         if (tracePageCache) {
-            importAndAssert(name, osmFile.getName(), assertions, "--trace-page-cache", "--into", home.homeDirectory().getCanonicalPath(), "--database", name, osmFile.getCanonicalPath());
+            importAndAssert(name, osmFile.getName(), assertions, "--trace-page-cache", "--into", home.homeDirectory().toFile().getCanonicalPath(), "--database", name, osmFile.getCanonicalPath());
         } else {
-            importAndAssert(name, osmFile.getName(), assertions, "--into", home.homeDirectory().getCanonicalPath(), "--database", name, osmFile.getCanonicalPath());
+            importAndAssert(name, osmFile.getName(), assertions, "--into", home.homeDirectory().toFile().getCanonicalPath(), "--database", name, osmFile.getCanonicalPath());
         }
     }
 
@@ -165,7 +165,7 @@ public class OSMImportToolTest {
         String[] args = new String[files.length + 5];
         args[0] = "--skip-duplicate-nodes";
         args[1] = "--into";
-        args[2] = home.homeDirectory().getCanonicalPath();
+        args[2] = home.homeDirectory().toFile().getCanonicalPath();
         args[3] = "--database";
         args[4] = name;
         for (int i = 0; i < files.length; i++) {
@@ -203,7 +203,7 @@ public class OSMImportToolTest {
     private void assertImportedCorrectly(String name, BiConsumer<GraphDatabaseService, Map<String, Long>> assertions) {
         // We are testing against community, and that cannot have multiple databases
         DatabaseManagementService databases = new TestDatabaseManagementServiceBuilder(home)
-                .setConfig(GraphDatabaseSettings.default_database, name)
+                .setConfig(GraphDatabaseSettings.initial_default_database, name)
                 .setConfig(GraphDatabaseSettings.fail_on_missing_files, false).build();
         GraphDatabaseService db = databases.database(name);
         Map<String, Long> stats = debugOSMModel(db);
@@ -305,7 +305,7 @@ public class OSMImportToolTest {
                     ArrayList<Node> wayNodes = new ArrayList<>(expectedNodeIds.length);
                     for (Path path : new MonoDirectionalTraversalDescription().depthFirst().relationships(RelationshipType.withName("NEXT"), direction).traverse(firstNode)) {
                         Node endNode = path.endNode();
-                        if (wayNodes.size() > 0 && endNode.getId() == firstNode.getId()) {
+                        if (wayNodes.size() > 0 && endNode.getElementId() == firstNode.getElementId()) {
                             break;
                         }
                         wayNodes.add(endNode);

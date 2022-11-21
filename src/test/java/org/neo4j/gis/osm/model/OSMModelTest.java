@@ -10,21 +10,25 @@ import static org.hamcrest.Matchers.closeTo;
 import static org.hamcrest.Matchers.equalTo;
 
 public class OSMModelTest {
+    private static PointValue cartesianValue(double x, double y) {
+        return Values.pointValue(CoordinateReferenceSystem.CARTESIAN, x, y);
+    }
+
 
     @Test
     public void shouldCalculateAnglesInTriangle() {
         PointValue[] left = new PointValue[]{
-                Values.pointValue(CoordinateReferenceSystem.Cartesian, 0, 0),
-                Values.pointValue(CoordinateReferenceSystem.Cartesian, 0, 0)
+                cartesianValue(0, 0),
+                cartesianValue(0, 0)
         };
         PointValue[] right = new PointValue[]{
-                Values.pointValue(CoordinateReferenceSystem.Cartesian, 10, 0),
-                Values.pointValue(CoordinateReferenceSystem.Cartesian, 10, -10)
+                cartesianValue(10, 0),
+                cartesianValue(10, -10)
         };
         for (int x = 10; x >= -10; x--) {
             PointValue[] apex = new PointValue[]{
-                    Values.pointValue(CoordinateReferenceSystem.Cartesian, x, 10),
-                    Values.pointValue(CoordinateReferenceSystem.Cartesian, 10 + x, 10 - x)
+                    cartesianValue(x, 10),
+                    cartesianValue(10 + x, 10 - x)
             };
             double[] leftAngle = new double[apex.length];
             double[] rightAngle = new double[apex.length];
