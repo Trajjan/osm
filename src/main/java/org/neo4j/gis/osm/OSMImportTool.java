@@ -7,10 +7,7 @@ import org.neo4j.configuration.SettingValueParsers;
 import org.neo4j.function.Predicates;
 import org.neo4j.gis.osm.importer.OSMInput;
 import org.neo4j.gis.osm.importer.PrintingImportLogicMonitor;
-import org.neo4j.internal.batchimport.BatchImporter;
-import org.neo4j.internal.batchimport.BatchImporterFactory;
-import org.neo4j.internal.batchimport.Configuration;
-import org.neo4j.internal.batchimport.ImportLogic;
+import org.neo4j.internal.batchimport.*;
 import org.neo4j.internal.batchimport.cache.idmapping.string.DuplicateInputIdException;
 import org.neo4j.internal.batchimport.input.BadCollector;
 import org.neo4j.internal.batchimport.input.Collector;
@@ -27,6 +24,7 @@ import org.neo4j.io.fs.FileUtils;
 import org.neo4j.io.layout.DatabaseLayout;
 import org.neo4j.io.layout.Neo4jLayout;
 import org.neo4j.io.os.OsBeanUtil;
+import org.neo4j.io.pagecache.context.CursorContextFactory;
 import org.neo4j.io.pagecache.tracing.DefaultPageCacheTracer;
 import org.neo4j.io.pagecache.tracing.PageCacheTracer;
 import org.neo4j.kernel.impl.store.format.RecordFormatSelector;
@@ -35,7 +33,8 @@ import org.neo4j.kernel.impl.util.Validators;
 import org.neo4j.kernel.internal.Version;
 import org.neo4j.kernel.lifecycle.LifeSupport;
 import org.neo4j.logging.internal.LogService;
-import org.neo4j.logging.internal.StoreLogService;
+import org.neo4j.logging.internal.SimpleLogService;
+import org.neo4j.logging.log4j.Log4jLogProvider;
 import org.neo4j.memory.EmptyMemoryTracker;
 import org.neo4j.scheduler.JobScheduler;
 
@@ -52,7 +51,7 @@ import java.util.function.Function;
 import static java.nio.charset.Charset.defaultCharset;
 import static org.apache.commons.lang3.ArrayUtils.isEmpty;
 import static org.neo4j.configuration.GraphDatabaseSettings.logs_directory;
-import static org.neo4j.configuration.GraphDatabaseSettings.store_internal_log_path;
+import static org.neo4j.configuration.GraphDatabaseSettings.server_logging_config_path;
 import static org.neo4j.internal.batchimport.AdditionalInitialIds.EMPTY;
 import static org.neo4j.internal.batchimport.Configuration.*;
 import static org.neo4j.internal.batchimport.input.BadCollector.BAD_FILE_NAME;
@@ -63,6 +62,7 @@ import static org.neo4j.io.ByteUnit.bytes;
 import static org.neo4j.io.ByteUnit.mebiBytes;
 import static org.neo4j.kernel.impl.scheduler.JobSchedulerFactory.createScheduler;
 import static org.neo4j.kernel.impl.store.PropertyType.EMPTY_BYTE_ARRAY;
+import static org.neo4j.kernel.impl.transaction.log.LogTailMetadata.EMPTY_LOG_TAIL;
 
 public class OSMImportTool {
 
@@ -132,13 +132,6 @@ public class OSMImportTool {
                         "to improve performance. If left as unspecified (null) it is set to " + DEFAULT_MAX_MEMORY_PERCENT +
                         "% of (free memory on machine - max JVM memory). " +
                         "Values can be plain numbers, like 10000000 or e.g. 20G for 20 gigabyte, or even e.g. 70%."),
-        CACHE_ON_HEAP("cache-on-heap",
-                DEFAULT.allowCacheAllocationOnHeap(),
-                "Whether or not to allow allocating memory for the cache on heap",
-                "(advanced) Whether or not to allow allocating memory for the cache on heap. " +
-                        "If 'false' then caches will still be allocated off-heap, but the additional free memory " +
-                        "inside the JVM will not be allocated for the caches. This to be able to have better control " +
-                        "over the heap memory"),
         HIGH_IO("high-io", null, "Assume a high-throughput storage subsystem",
                 "(advanced) Ignore environment-based heuristics, and assume that the target storage subsystem can " +
                         "support parallel IO with high throughput."),
@@ -272,22 +265,22 @@ public class OSMImportTool {
         try (FileSystemAbstraction fs = new DefaultFileSystemAbstraction()) {
             File homeDir = args.interpretOption(Options.HOME_DIR.key(), Converters.mandatory(), Converters.toFile(), DIRECTORY_IS_WRITABLE);
             homeDir.mkdirs();
-            var homeLayout = Neo4jLayout.of(homeDir);
+            var homeLayout = Neo4jLayout.of(homeDir.toPath());
             var databaseName = args.get(Options.DB_NAME.key(), "osm");
             var databaseLayout = homeLayout.databaseLayout(databaseName);
             boolean deleteDb = args.getBoolean(Options.DELETE_DB.key(), Boolean.FALSE, Boolean.TRUE);
             if (deleteDb) {
-                FileUtils.deleteRecursively(databaseLayout.databaseDirectory());
-                FileUtils.deleteRecursively(databaseLayout.getTransactionLogsDirectory());
+                FileUtils.deleteDirectory(databaseLayout.databaseDirectory());
+                FileUtils.deleteDirectory(databaseLayout.getTransactionLogsDirectory());
             }
             Config config = Config.defaults(GraphDatabaseSettings.neo4j_home, Path.of(homeDir.getAbsolutePath()));
             Path logsDir = config.get(GraphDatabaseSettings.logs_directory);
-            fs.mkdirs(logsDir.toFile());
+            fs.mkdirs(logsDir);
 
             skipBadEntriesLogging = args.getBoolean(Options.SKIP_BAD_ENTRIES_LOGGING.key(), (Boolean) Options.SKIP_BAD_ENTRIES_LOGGING.defaultValue(), false);
             if (!skipBadEntriesLogging) {
                 badFile = new File(homeDir, BAD_FILE_NAME);
-                badOutput = new BufferedOutputStream(fs.openAsOutputStream(badFile, false));
+                badOutput = new BufferedOutputStream(fs.openAsOutputStream(badFile.toPath(), false));
             }
             OSMRange range = args.interpretOption(Options.RANGE.key(), Converters.optional(), Converters.toRange(), RANGE_IS_VALID);
             osmFiles = args.orphansAsArray();
@@ -295,7 +288,6 @@ public class OSMImportTool {
                 throw new IllegalArgumentException("No OSM files specified");
             }
             String maxMemoryString = args.get(Options.MAX_MEMORY.key(), null);
-            maxMemory = parseMaxMemory(maxMemoryString);
 
             enableStacktrace = args.getBoolean(Options.STACKTRACE.key(), Boolean.FALSE, Boolean.TRUE);
             processors = args.getNumber(Options.PROCESSORS.key(), null);
@@ -309,8 +301,7 @@ public class OSMImportTool {
             Collector badCollector = getBadCollector(badTolerance, skipBadRelationships, skipDuplicateNodes, skipBadEntriesLogging, badOutput);
 
             dbConfig = loadDbConfig(args.interpretOption(Options.ADDITIONAL_CONFIG.key(), Converters.optional(), Converters.toFile(), f -> Validators.REGEX_FILE_EXISTS.validate(f.getAbsolutePath())));
-            boolean allowCacheOnHeap = args.getBoolean(Options.CACHE_ON_HEAP.key(), (Boolean) Options.CACHE_ON_HEAP.defaultValue());
-            configuration = importConfiguration(processors, defaultSettingsSuitableForTests, maxMemory, homeDir, allowCacheOnHeap, defaultHighIO);
+            configuration = importConfiguration(defaultSettingsSuitableForTests);
             in = defaultSettingsSuitableForTests ? new ByteArrayInputStream(EMPTY_BYTE_ARRAY) : System.in;
             boolean detailedProgress = args.getBoolean(Options.DETAILED_PROGRESS.key(), (Boolean) Options.DETAILED_PROGRESS.defaultValue());
             boolean tracePageCache = args.getBoolean(Options.TRACE_PAGE_CACHE.key(), (Boolean) Options.TRACE_PAGE_CACHE.defaultValue());
@@ -392,33 +383,34 @@ public class OSMImportTool {
         LifeSupport life = new LifeSupport();
 
         Config config = Config.newBuilder().fromConfig(dbConfig).set(logs_directory, Path.of(logsDir.getCanonicalPath())).build();
-        Path internalLogFile = config.get(store_internal_log_path);
-        LogService logService = life.add(StoreLogService.withInternalLog(internalLogFile.toFile()).build(fs));
+        Path internalLogFile = config.get(server_logging_config_path);
+        LogService logService = life.add(new SimpleLogService(new Log4jLogProvider(new FileOutputStream(internalLogFile.toFile()))));
         final JobScheduler jobScheduler = life.add(createScheduler());
 
         life.start();
         ExecutionMonitor executionMonitor = detailedProgress
                 ? new SpectrumExecutionMonitor(2, TimeUnit.SECONDS, out, SpectrumExecutionMonitor.DEFAULT_WIDTH)
                 : ExecutionMonitors.defaultVisible();
-        ImportLogic.Monitor importMonitor = new PrintingImportLogicMonitor(out, err);
+        Monitor importMonitor = new PrintingImportLogicMonitor(out, err);
         var cacheTracer = tracePageCache ? new DefaultPageCacheTracer() : PageCacheTracer.NULL;
         BatchImporter importer = BatchImporterFactory.withHighestPriority().instantiate(databaseLayout,
                 fs,
                 null, // no external page cache
-                cacheTracer,
                 configuration,
                 logService,
                 executionMonitor,
                 EMPTY,
+                EMPTY_LOG_TAIL,
                 dbConfig,
-                RecordFormatSelector.selectForConfig(dbConfig, logService.getInternalLogProvider()),
                 importMonitor,
                 jobScheduler,
                 badCollector,
                 TransactionLogInitializer.getLogFilesInitializer(),
-                EmptyMemoryTracker.INSTANCE
+                IndexImporterFactory.EMPTY,
+                EmptyMemoryTracker.INSTANCE,
+                CursorContextFactory.NULL_CONTEXT_FACTORY
         );
-        printOverview(databaseLayout.databaseDirectory(), osmFiles, configuration, out);
+        printOverview(databaseLayout.databaseDirectory().toFile(), osmFiles, configuration, out);
         success = false;
         try {
             importer.doImport(new OSMInput(fs, osmFiles, configuration, range));
@@ -449,7 +441,7 @@ public class OSMImportTool {
             }
 
             if (!success) {
-                err.println("WARNING Import failed. The store files in " + databaseLayout.databaseDirectory().getAbsolutePath() +
+                err.println("WARNING Import failed. The store files in " + databaseLayout.databaseDirectory().toFile().getAbsolutePath() +
                         " are left as they are, although they are likely in an unusable state. " +
                         "Starting a database on these store files will likely fail or observe inconsistent records so " +
                         "start at your own risk or delete the store manually");
@@ -457,33 +449,11 @@ public class OSMImportTool {
         }
     }
 
-    public static org.neo4j.internal.batchimport.Configuration importConfiguration(
-            Number processors, boolean defaultSettingsSuitableForTests, Long maxMemory, File homeDir,
-            boolean allowCacheOnHeap, Boolean defaultHighIO) {
+    public static org.neo4j.internal.batchimport.Configuration importConfiguration(boolean defaultSettingsSuitableForTests) {
         return new org.neo4j.internal.batchimport.Configuration() {
             @Override
             public long pageCacheMemory() {
                 return defaultSettingsSuitableForTests ? mebiBytes(8) : DEFAULT.pageCacheMemory();
-            }
-
-            @Override
-            public int maxNumberOfProcessors() {
-                return processors != null ? processors.intValue() : DEFAULT.maxNumberOfProcessors();
-            }
-
-            @Override
-            public long maxMemoryUsage() {
-                return maxMemory != null ? maxMemory : DEFAULT.maxMemoryUsage();
-            }
-
-            @Override
-            public boolean highIO() {
-                return defaultHighIO != null ? defaultHighIO : FileUtils.highIODevice(homeDir.toPath());
-            }
-
-            @Override
-            public boolean allowCacheAllocationOnHeap() {
-                return allowCacheOnHeap;
             }
         };
     }
@@ -539,24 +509,6 @@ public class OSMImportTool {
         }
     }
 
-    private static Long parseMaxMemory(String maxMemoryString) {
-        if (maxMemoryString != null) {
-            maxMemoryString = maxMemoryString.trim();
-            if (maxMemoryString.endsWith("%")) {
-                int percent = Integer.parseInt(maxMemoryString.substring(0, maxMemoryString.length() - 1));
-                long result = calculateMaxMemoryFromPercent(percent);
-                if (!canDetectFreeMemory()) {
-                    System.err.println("WARNING: amount of free memory couldn't be detected so defaults to " +
-                            bytes(result) + ". For optimal performance instead explicitly specify amount of " +
-                            "memory that importer is allowed to use using " + Options.MAX_MEMORY.argument());
-                }
-                return result;
-            }
-            return SettingValueParsers.parseLongWithUnit(maxMemoryString);
-        }
-        return null;
-    }
-
     private static Collector getBadCollector(long badTolerance, boolean skipBadRelationships, boolean skipDuplicateNodes, boolean skipBadEntriesLogging, OutputStream badOutput) {
         int collect = collect(skipBadRelationships, skipDuplicateNodes, false);
         return skipBadEntriesLogging ? silentBadCollector(badTolerance, collect) : badCollector(badOutput, badTolerance, collect);
@@ -568,7 +520,7 @@ public class OSMImportTool {
     }
 
     private static Config loadDbConfig(File file) {
-        return file != null && file.exists() ? Config.newBuilder().fromFile(file).build() : Config.defaults();
+        return file != null && file.exists() ? Config.newBuilder().fromFile(file.toPath()).build() : Config.defaults();
     }
 
     private static void printOverview(File storeDir, String[] osmFiles, org.neo4j.internal.batchimport.Configuration configuration, PrintStream out) {
@@ -582,8 +534,8 @@ public class OSMImportTool {
         printIndented("Total machine memory: " + bytes(OsBeanUtil.getTotalPhysicalMemory()), out);
         printIndented("Free machine memory: " + bytes(OsBeanUtil.getFreePhysicalMemory()), out);
         printIndented("Max heap memory : " + bytes(Runtime.getRuntime().maxMemory()), out);
-        printIndented("Processors: " + configuration.maxNumberOfProcessors(), out);
-        printIndented("Configured max memory: " + bytes(configuration.maxMemoryUsage()), out);
+        printIndented("Processors: " + configuration.maxNumberOfWorkerThreads(), out);
+        printIndented("Configured max memory: " + bytes(configuration.maxOffHeapMemory()), out);
         printIndented("High-IO: " + configuration.highIO(), out);
         out.println();
     }

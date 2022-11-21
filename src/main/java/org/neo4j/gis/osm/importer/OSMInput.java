@@ -36,7 +36,7 @@ public class OSMInput implements Input {
     // This uses an internal API of Neo4j, which could be a compatibility issue moving forward
     // Two options: get Neo4j to make this public, or we create our own version here. The
     // CRS is easy, but the calculator is less so.
-    private final CoordinateReferenceSystem wgs84 = CoordinateReferenceSystem.WGS84;
+    private final CoordinateReferenceSystem wgs84 = CoordinateReferenceSystem.WGS_84;
     private final CRSCalculator calculator = wgs84.getCalculator();
     private final Configuration config;
 

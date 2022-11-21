@@ -28,12 +28,12 @@ import static org.neo4j.internal.helpers.collection.MapUtil.map;
 
 public class OSMImportToolTest {
 
-    private static Neo4jLayout home = Neo4jLayout.of(new File("target/import-test"));
+    private static Neo4jLayout home = Neo4jLayout.of(new File("target/import-test").toPath());
 
     @BeforeClass
     public static void ensureClean() throws IOException {
         // Previous runs leave databases that are incompatible with newer runs
-        FileUtils.deleteRecursively(home.homeDirectory());
+        FileUtils.deleteDirectory(home.homeDirectory());
     }
 
     @Test
@@ -193,11 +193,11 @@ public class OSMImportToolTest {
 
     private File prepareStore(String name) throws IOException {
         var storeDir = home.databaseLayout(name).databaseDirectory();
-        FileUtils.deleteRecursively(storeDir);
-        if (storeDir.mkdirs()) {
+        FileUtils.deleteDirectory(storeDir);
+        if (storeDir.toFile().mkdirs()) {
             System.out.println("Created store directory: " + storeDir);
         }
-        return storeDir;
+        return storeDir.toFile();
     }
 
     private void assertImportedCorrectly(String name, BiConsumer<GraphDatabaseService, Map<String, Long>> assertions) {
