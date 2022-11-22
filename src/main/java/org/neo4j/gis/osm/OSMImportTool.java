@@ -3,8 +3,6 @@ package org.neo4j.gis.osm;
 import org.neo4j.common.Validator;
 import org.neo4j.configuration.Config;
 import org.neo4j.configuration.GraphDatabaseSettings;
-import org.neo4j.configuration.SettingValueParsers;
-import org.neo4j.cypher.internal.cache.CacheTracer;
 import org.neo4j.function.Predicates;
 import org.neo4j.gis.osm.importer.OSMInput;
 import org.neo4j.gis.osm.importer.PrintingImportLogicMonitor;
@@ -28,7 +26,6 @@ import org.neo4j.io.os.OsBeanUtil;
 import org.neo4j.io.pagecache.context.CursorContextFactory;
 import org.neo4j.io.pagecache.tracing.DefaultPageCacheTracer;
 import org.neo4j.io.pagecache.tracing.PageCacheTracer;
-import org.neo4j.kernel.impl.store.format.RecordFormatSelector;
 import org.neo4j.kernel.impl.transaction.log.files.TransactionLogInitializer;
 import org.neo4j.kernel.impl.util.Validators;
 import org.neo4j.kernel.internal.Version;
@@ -36,13 +33,10 @@ import org.neo4j.kernel.lifecycle.LifeSupport;
 import org.neo4j.logging.NullLogProvider;
 import org.neo4j.logging.internal.LogService;
 import org.neo4j.logging.internal.SimpleLogService;
-import org.neo4j.logging.log4j.Log4jLogProvider;
-import org.neo4j.logging.log4j.Neo4jLoggerContext;
 import org.neo4j.memory.EmptyMemoryTracker;
 import org.neo4j.scheduler.JobScheduler;
 
 import java.io.*;
-import java.nio.charset.Charset;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -51,10 +45,7 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
-import static java.nio.charset.Charset.defaultCharset;
 import static org.apache.commons.lang3.ArrayUtils.isEmpty;
-import static org.neo4j.configuration.GraphDatabaseSettings.logs_directory;
-import static org.neo4j.configuration.GraphDatabaseSettings.server_logging_config_path;
 import static org.neo4j.internal.batchimport.AdditionalInitialIds.EMPTY;
 import static org.neo4j.internal.batchimport.Configuration.*;
 import static org.neo4j.internal.batchimport.input.BadCollector.BAD_FILE_NAME;
@@ -77,15 +68,14 @@ public class OSMImportTool {
                 "The root of the DBMS into which to do the import."),
         DB_NAME("database", null,
                 "<database-name>",
-                "Database name to import into. " + "Must not contain existing database.", true),
+                "Database name to import into. " + "Must not contain existing database."),
         DELETE_DB("delete", Boolean.FALSE, "<true/false>",
                 "Whether or not to delete the existing database before creating a new one."),
         INPUT_ENCODING("input-encoding", null,
                 "<character set>",
                 "Character set that input data is encoded in. Provided value must be one out of the available "
                         + "character sets in the JVM, as provided by Charset#availableCharsets(). "
-                        + "If no input encoding is provided, the default character set of the JVM will be used.",
-                true),
+                        + "If no input encoding is provided, the default character set of the JVM will be used."),
         PROCESSORS("processors", null,
                 "<max processor count>",
                 "(advanced) Max number of processors used by the importer. Defaults to the number of "
@@ -128,7 +118,7 @@ public class OSMImportTool {
                 "<path/to/" + Config.DEFAULT_CONFIG_FILE_NAME + ">",
                 "(advanced) File specifying database-specific configuration. For more information consult "
                         + "manual about available configuration options for a neo4j configuration file. "
-                        + "Only configuration affecting store at time of creation will be read.", true),
+                        + "Only configuration affecting store at time of creation will be read."),
         MAX_MEMORY("max-memory", null,
                 "<max memory that importer can use>",
                 "(advanced) Maximum memory that importer can use for various data structures and caching " +
@@ -146,22 +136,16 @@ public class OSMImportTool {
         private final String usage;
         private final String description;
         private final boolean keyAndUsageGoTogether;
-        private final boolean supported;
 
         Options(String key, Object defaultValue, String usage, String description) {
-            this(key, defaultValue, usage, description, false, false);
+            this(key, defaultValue, usage, description, false);
         }
 
-        Options(String key, Object defaultValue, String usage, String description, boolean supported) {
-            this(key, defaultValue, usage, description, supported, false);
-        }
-
-        Options(String key, Object defaultValue, String usage, String description, boolean supported, boolean keyAndUsageGoTogether) {
+        Options(String key, Object defaultValue, String usage, String description, boolean keyAndUsageGoTogether) {
             this.key = key;
             this.defaultValue = defaultValue;
             this.usage = usage;
             this.description = description;
-            this.supported = supported;
             this.keyAndUsageGoTogether = keyAndUsageGoTogether;
         }
 
@@ -201,20 +185,12 @@ public class OSMImportTool {
             return "*" + argument() + usageString + "*::\n" + filteredDescription + "\n\n";
         }
 
-        String manualEntry() {
-            return "[[import-tool-option-" + key() + "]]\n" + manPageEntry() + "//^\n\n";
-        }
-
         Object defaultValue() {
             return defaultValue;
         }
 
         private static String availableProcessorsHint() {
             return " (in your case " + Runtime.getRuntime().availableProcessors() + ")";
-        }
-
-        public boolean isSupportedOption() {
-            return this.supported;
         }
     }
 
@@ -250,20 +226,14 @@ public class OSMImportTool {
 
         String[] osmFiles;
         boolean enableStacktrace;
-        Number processors;
         long badTolerance;
-        Charset inputEncoding;
         boolean skipBadRelationships;
         boolean skipDuplicateNodes;
-        boolean ignoreExtraColumns;
         boolean skipBadEntriesLogging;
         Config dbConfig;
         OutputStream badOutput = null;
         org.neo4j.internal.batchimport.Configuration configuration;
         File badFile = null;
-        Long maxMemory;
-        Boolean defaultHighIO;
-        InputStream in;
 
         try (FileSystemAbstraction fs = new DefaultFileSystemAbstraction()) {
             File homeDir = args.interpretOption(Options.HOME_DIR.key(), Converters.mandatory(), Converters.toFile(), DIRECTORY_IS_WRITABLE);
@@ -290,25 +260,20 @@ public class OSMImportTool {
             if (osmFiles.length == 0) {
                 throw new IllegalArgumentException("No OSM files specified");
             }
-            String maxMemoryString = args.get(Options.MAX_MEMORY.key(), null);
 
             enableStacktrace = args.getBoolean(Options.STACKTRACE.key(), Boolean.FALSE, Boolean.TRUE);
-            processors = args.getNumber(Options.PROCESSORS.key(), null);
             badTolerance = parseNumberOrUnlimited(args, Options.BAD_TOLERANCE);
-            inputEncoding = Charset.forName(args.get(Options.INPUT_ENCODING.key(), defaultCharset().name()));
 
             skipBadRelationships = args.getBoolean(Options.SKIP_BAD_RELATIONSHIPS.key(), (Boolean) Options.SKIP_BAD_RELATIONSHIPS.defaultValue(), true);
             skipDuplicateNodes = args.getBoolean(Options.SKIP_DUPLICATE_NODES.key(), (Boolean) Options.SKIP_DUPLICATE_NODES.defaultValue(), true);
-            defaultHighIO = args.getBoolean(Options.HIGH_IO.key(), (Boolean) Options.HIGH_IO.defaultValue(), true);
 
             Collector badCollector = getBadCollector(badTolerance, skipBadRelationships, skipDuplicateNodes, skipBadEntriesLogging, badOutput);
 
             dbConfig = loadDbConfig(args.interpretOption(Options.ADDITIONAL_CONFIG.key(), Converters.optional(), Converters.toFile(), f -> Validators.REGEX_FILE_EXISTS.validate(f.getAbsolutePath())));
             configuration = importConfiguration(defaultSettingsSuitableForTests);
-            in = defaultSettingsSuitableForTests ? new ByteArrayInputStream(EMPTY_BYTE_ARRAY) : System.in;
             boolean detailedProgress = args.getBoolean(Options.DETAILED_PROGRESS.key(), (Boolean) Options.DETAILED_PROGRESS.defaultValue());
             boolean tracePageCache = args.getBoolean(Options.TRACE_PAGE_CACHE.key(), (Boolean) Options.TRACE_PAGE_CACHE.defaultValue());
-            doImport(out, err, in, databaseLayout, logsDir.toFile(), badFile, fs, osmFiles, enableStacktrace, dbConfig, badOutput, badCollector, configuration, detailedProgress, tracePageCache, range);
+            doImport(out, err, databaseLayout, logsDir.toFile(), fs, osmFiles, enableStacktrace, dbConfig, badOutput, badCollector, configuration, detailedProgress, tracePageCache, range);
         }
     }
 
@@ -375,7 +340,7 @@ public class OSMImportTool {
         }
     };
 
-    public static void doImport(PrintStream out, PrintStream err, InputStream in, DatabaseLayout databaseLayout, File logsDir, File badFile,
+    public static void doImport(PrintStream out, PrintStream err, DatabaseLayout databaseLayout, File badFile,
                                 FileSystemAbstraction fs, String[] osmFiles,
                                 boolean enableStacktrace,
                                 Config dbConfig, OutputStream badOutput,
@@ -384,9 +349,6 @@ public class OSMImportTool {
                                 OSMRange range) throws IOException {
         boolean success;
         LifeSupport life = new LifeSupport();
-
-        Config config = Config.newBuilder().fromConfig(dbConfig).set(logs_directory, Path.of(logsDir.getCanonicalPath())).build();
-        Path internalLogFile = config.get(server_logging_config_path);
 
         LogService logService = life.add(new SimpleLogService(NullLogProvider.getInstance()));
         final JobScheduler jobScheduler = life.add(createScheduler());
@@ -638,8 +600,7 @@ public class OSMImportTool {
     }
 
     private enum Anchor {
-        ID_SPACES("import-tool-id-spaces"),
-        RELATIONSHIP("import-tool-header-format-rels");
+        ID_SPACES("import-tool-id-spaces");
 
         private final String anchor;
 

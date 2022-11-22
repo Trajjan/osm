@@ -28,7 +28,7 @@ import static org.neo4j.internal.helpers.collection.MapUtil.map;
 
 public class OSMImportToolTest {
 
-    private static Neo4jLayout home = Neo4jLayout.of(new File("target/import-test").toPath());
+    private static final Neo4jLayout home = Neo4jLayout.of(new File("target/import-test").toPath());
 
     @BeforeClass
     public static void ensureClean() throws IOException {

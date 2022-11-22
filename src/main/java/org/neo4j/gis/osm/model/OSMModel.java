@@ -69,7 +69,7 @@ public class OSMModel {
 
         @Override
         public String toString() {
-            return "Node[" + node.getId() + "]:" + point;
+            return "Node[" + node.getElementId() + "]:" + point;
         }
 
         public Node node() {
@@ -121,11 +121,11 @@ public class OSMModel {
                 Node endNode = path.endNode();
                 Node osmNode = endNode.getSingleRelationship(NODE, Direction.OUTGOING).getEndNode();
                 LocatedNode node;
-                if (seenNodes.containsKey(osmNode.getId())) {
-                    node = seenNodes.get(osmNode.getId());
+                if (seenNodes.containsKey(osmNode.getElementId())) {
+                    node = seenNodes.get(osmNode.getElementId());
                 } else {
                     node = new LocatedNode(osmNode);
-                    this.seenNodes.put(osmNode.getId(), node);
+                    this.seenNodes.put(Long.valueOf(osmNode.getElementId()), node);
                 }
                 this.wayNodes.add(endNode);
                 this.nodes.add(node);
@@ -142,7 +142,7 @@ public class OSMModel {
 
         @Override
         public String toString() {
-            return "OSMWay[" + wayNode.getId() + "]: name:" + name + ",  length:" + nodes.size();
+            return "OSMWay[" + wayNode.getElementId() + "]: name:" + name + ",  length:" + nodes.size();
         }
     }
 
@@ -288,8 +288,8 @@ public class OSMModel {
         public LocatedNode right;
         public PointValue point;
         public LocatedNode poi;
-        private CRSCalculator calculator;
-        private double distance;
+        private final CRSCalculator calculator;
+        private final double distance;
 
         private LocationInterpolated(CRSCalculator calculator, LocatedNode poi, PointValue point, LocatedNode left, LocatedNode right) {
             this.left = left;
@@ -383,8 +383,8 @@ public class OSMModel {
         static double angleTo(PointValue origin, PointValue point) {
             double dx = point.coordinate()[0] - origin.coordinate()[0];
             double dy = point.coordinate()[1] - origin.coordinate()[1];
-            double theta = 180.0 / Math.PI * Math.atan2(dy, dx);
-            return theta;
+
+            return 180.0 / Math.PI * Math.atan2(dy, dx);
         }
 
         static double angle(PointValue origin, PointValue a, PointValue b) {
@@ -469,23 +469,24 @@ public class OSMModel {
             ArrayList<Relationship> toDelete = new ArrayList<>();
             for (Relationship rel : this.fromNode.getRelationships(Direction.BOTH, OSMModel.ROUTE)) {
                 if (rel.getOtherNode(fromNode).equals(this.toNode)) {
-                    if (getRelIdFromProperty(rel, "fromRel") == fromRel.getId() && getRelIdFromProperty(rel, "toRel") == toRel.getId()) {
+                    if (Objects.equals(getRelIdFromProperty(rel, "fromRel"), fromRel.getElementId()) &&
+                            Objects.equals(getRelIdFromProperty(rel, "toRel"), toRel.getElementId())) {
                         toDelete.add(rel);
                     }
                 }
             }
             toDelete.forEach(Relationship::delete);
             Relationship rel = fromNode.createRelationshipTo(toNode, OSMModel.ROUTE);
-            rel.setProperty("fromRel", fromRel.getId());
-            rel.setProperty("toRel", toRel.getId());
+            rel.setProperty("fromRel", fromRel.getElementId());
+            rel.setProperty("toRel", toRel.getElementId());
             return rel;
         }
 
-        private long getRelIdFromProperty(Relationship rel, String property) {
+        private String getRelIdFromProperty(Relationship rel, String property) {
             if (rel.hasProperty(property)) {
-                return (Long) rel.getProperty(property);
+                return (String) rel.getProperty(property);
             } else {
-                return -1;
+                return null;
             }
         }
 
@@ -497,12 +498,12 @@ public class OSMModel {
     }
 
     public static class IntersectionRoutes {
-        private Node fromNode;
-        private Node wayNode;
-        private Relationship fromRel;
-        private boolean addLabels;
-        private int maxDepth;
-        private HashSet<Node> previouslySeen;
+        private final Node fromNode;
+        private final Node wayNode;
+        private final Relationship fromRel;
+        private final boolean addLabels;
+        private final int maxDepth;
+        private final HashSet<Node> previouslySeen;
         public List<IntersectionRoute> routes;
 
         public IntersectionRoutes(Node node, Relationship wayNodeRel, Node wayNode, boolean addLabels) {

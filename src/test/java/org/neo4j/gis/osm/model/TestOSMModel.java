@@ -14,7 +14,7 @@ public class TestOSMModel extends OSMModel {
     ArrayList<OSMModel.OSMWay> ways;
     HashMap<PointValue, LocatedNode> nodes;
 
-    private Transaction tx;
+    private final Transaction tx;
 
     public TestOSMModel(Transaction tx) {
         this.tx = tx;
