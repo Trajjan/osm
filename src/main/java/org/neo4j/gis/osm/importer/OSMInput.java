@@ -17,7 +17,6 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.*;
-import java.util.function.ToIntFunction;
 
 import static org.neo4j.gis.spatial.SpatialConstants.*;
 
@@ -31,17 +30,14 @@ public class OSMInput implements Input {
     private final Group tagsGroup;
     private final Group miscGroup;
     private final RangeFilter range;
-    private final FileSystemAbstraction fs;
 
     // This uses an internal API of Neo4j, which could be a compatibility issue moving forward
     // Two options: get Neo4j to make this public, or we create our own version here. The
     // CRS is easy, but the calculator is less so.
     private final CoordinateReferenceSystem wgs84 = CoordinateReferenceSystem.WGS_84;
-    private final CRSCalculator calculator = wgs84.getCalculator();
     private final Configuration config;
 
-    public OSMInput(FileSystemAbstraction fs, String[] osmFiles, Configuration config, RangeFilter range) {
-        this.fs = fs;
+    public OSMInput(String[] osmFiles, Configuration config, RangeFilter range) {
         this.osmFiles = osmFiles;
         this.config = config;
         this.range = range;
@@ -54,7 +50,7 @@ public class OSMInput implements Input {
     }
 
     public enum RoadDirection {
-        BOTH, FORWARD, BACKWARD;
+        BOTH, FORWARD, BACKWARD
     }
 
     /**
@@ -73,12 +69,14 @@ public class OSMInput implements Input {
      */
     public static RoadDirection getRoadDirection(Map<String, Object> wayProperties) {
         String oneway = (String) wayProperties.get("oneway");
+
         if (null != oneway) {
             if ("-1".equals(oneway))
                 return RoadDirection.BACKWARD;
             if ("1".equals(oneway) || "yes".equalsIgnoreCase(oneway) || "true".equalsIgnoreCase(oneway))
                 return RoadDirection.FORWARD;
         }
+
         return RoadDirection.BOTH;
     }
 
@@ -400,7 +398,6 @@ public class OSMInput implements Input {
             OSMWayNode previousWayNode = null;
             OSMNode firstNode = null;
             OSMNode previousNode = null;
-            LinkedHashMap<String, Object> relProps = new LinkedHashMap<String, Object>();
             HashSet<Long> madeWayNodes = new HashSet<>(wayNodes.size());   // TODO: Find a less GC sensitive way
             for (long osmId : wayNodes) {
                 OSMNode osmNode = new OSMNode(osmId);
@@ -465,7 +462,7 @@ public class OSMInput implements Input {
                             member = new OSMRelation(member_ref, null);
                             break;
                         default:
-                            error("Unknown member type: " + memberProps.toString());
+                            error("Unknown member type: " + memberProps);
                             continue;
                     }
                     if (member.equals(prevMember)) {
@@ -487,7 +484,7 @@ public class OSMInput implements Input {
                     addEvent(new OSMRelationMemberRel(osmRelation, member, relProps));
                     prevMember = member;
                 } else {
-                    error("Cannot process invalid relation member: " + memberProps.toString());
+                    error("Cannot process invalid relation member: " + memberProps);
                 }
             }
             previousTaggableNodeEvent = osmRelation;
@@ -549,7 +546,7 @@ public class OSMInput implements Input {
     }
 
     // "2008-06-11T12:36:28Z"
-    private DateTimeFormatter timestampFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'");
+    private final DateTimeFormatter timestampFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'");
 
     private abstract class OSMInputIterator implements InputIterator {
         private final String osmFile;
@@ -559,7 +556,7 @@ public class OSMInput implements Input {
         private Map<String, Object> wayProperties = null;
         private Map<String, Object> relationProperties = null;
         private int depth = 0;
-        private ArrayList<String> currentXMLTags = new ArrayList<>();
+        private final ArrayList<String> currentXMLTags = new ArrayList<>();
         private Map<String, Object> currentNodeTags = new LinkedHashMap<>();
 
         private OSMInputIterator(String osmFile) {
@@ -703,7 +700,7 @@ public class OSMInput implements Input {
     }
 
     private abstract class MultiFileInputIterator implements InputIterator {
-        private String[] osmFiles;
+        private final String[] osmFiles;
         private int currentFileIndex;
         private OSMInputIterator current;
 

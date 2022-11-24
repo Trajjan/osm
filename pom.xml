@@ -10,7 +10,7 @@
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <javac.target>11</javac.target>
+        <javac.target>17</javac.target>
         <jmh.version>1.19</jmh.version>
         <compress.version>1.16.1</compress.version>
         <neo4j.version>5.2.0</neo4j.version>

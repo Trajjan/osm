@@ -55,11 +55,9 @@ import static org.neo4j.internal.helpers.Strings.TAB;
 import static org.neo4j.io.ByteUnit.bytes;
 import static org.neo4j.io.ByteUnit.mebiBytes;
 import static org.neo4j.kernel.impl.scheduler.JobSchedulerFactory.createScheduler;
-import static org.neo4j.kernel.impl.store.PropertyType.EMPTY_BYTE_ARRAY;
 import static org.neo4j.kernel.impl.transaction.log.LogTailMetadata.EMPTY_LOG_TAIL;
 
 public class OSMImportTool {
-
     private static final String UNLIMITED = "unlimited";
 
     enum Options {
@@ -179,12 +177,6 @@ public class OSMImportTool {
             return result;
         }
 
-        String manPageEntry() {
-            String filteredDescription = descriptionWithDefaultValue().replace(availableProcessorsHint(), "");
-            String usageString = (usage.length() > 0) ? spaceInBetweenArgumentAndUsage() + usage : "";
-            return "*" + argument() + usageString + "*::\n" + filteredDescription + "\n\n";
-        }
-
         Object defaultValue() {
             return defaultValue;
         }
@@ -233,7 +225,7 @@ public class OSMImportTool {
         Config dbConfig;
         OutputStream badOutput = null;
         org.neo4j.internal.batchimport.Configuration configuration;
-        File badFile = null;
+        File badFile;
 
         try (FileSystemAbstraction fs = new DefaultFileSystemAbstraction()) {
             File homeDir = args.interpretOption(Options.HOME_DIR.key(), Converters.mandatory(), Converters.toFile(), DIRECTORY_IS_WRITABLE);
@@ -379,7 +371,7 @@ public class OSMImportTool {
         printOverview(databaseLayout.databaseDirectory().toFile(), osmFiles, configuration, out);
         success = false;
         try {
-            importer.doImport(new OSMInput(fs, osmFiles, configuration, range));
+            importer.doImport(new OSMInput(osmFiles, configuration, range));
             success = true;
         } catch (Exception e) {
             throw andPrintError("Import error", e, enableStacktrace, err);
@@ -553,7 +545,7 @@ public class OSMImportTool {
         }
 
         public String getReference(Anchor anchor) {
-            // As long as the the operations manual is single-page we only use the anchor.
+            // As long as the operations manual is single-page we only use the anchor.
             return page + "#" + anchor.anchor;
         }
     }
